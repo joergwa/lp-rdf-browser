@@ -12,6 +12,8 @@
     "urn:activitystreams-owl:map"
   ],
   "label_lang_preference": ["de", null, "en"],
+  "part_of_predicate": "http://purl.obolibrary.org/obo/BFO_0000050",
+  "has_part_predicate": "http://purl.obolibrary.org/obo/BFO_0000051",
   "impressum_url": "https://yovisto.com/de/impressum/",
   "impressum_label": "Impressum"
 }

@@ -392,8 +392,19 @@ function renderResource(data) {
   const incoming = (data.incoming || []).map((g) => renderPredGroup(g, "subjects", true)).join("")
     || `<p class="truncated-note">Nothing else references this resource${selectedGraphs.length ? " in the selected graph(s)" : ""}.</p>`;
 
+  // Ancestors via config's "part of" predicate (see fetchPartOfChain in
+  // sparql.js), root-first, not including this resource itself - its own
+  // title right below already covers that.
+  const breadcrumb = data.breadcrumb || [];
+  const breadcrumbHtml = breadcrumb.length ? `
+    <nav class="breadcrumb" aria-label="Part-of hierarchy">
+      ${breadcrumb.map((b) => navLink(b.iri, b.label || b.curie || b.iri, 'class="breadcrumb-item"')).join('<span class="breadcrumb-sep">&rsaquo;</span>')}
+    </nav>
+  ` : "";
+
   contentEl.innerHTML = `
     <div class="resource-header">
+      ${breadcrumbHtml}
       <div class="${titleClass}">${escapeHtml(title)}</div>
       <div class="resource-iri-row">
         <span class="resource-iri">${escapeHtml(data.iri)}</span>

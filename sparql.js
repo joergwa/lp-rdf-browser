@@ -48,6 +48,20 @@ const DEFAULT_CONFIG = {
     "http://www.w3.org/2002/07/owl#Thing",
     "http://www.w3.org/2002/07/owl#NamedIndividual",
   ],
+  // The "part of" predicate (object pointing from a part to its whole) used
+  // to build a breadcrumb trail on a resource page - empty (the default)
+  // disables the feature entirely. This is dataset-specific (there's no
+  // universal RDF/OWL "part of"), so it's opt-in via config.json rather than
+  // a built-in default - e.g. BFO's "part of" (obo:BFO_0000050) for an
+  // endpoint that uses it.
+  part_of_predicate: "",
+  // Its inverse, "has part" (e.g. BFO's obo:BFO_0000051) - not used for the
+  // breadcrumb walk itself, only so the two can be pinned next to each
+  // other in a resource's Properties list (see predicateSortKey) instead of
+  // wherever they'd otherwise land alphabetically among everything else.
+  // Deliberately configurable rather than hardcoded - which vocabulary term
+  // a given deployment's data actually uses for this can change.
+  has_part_predicate: "",
   impressum_url: "",
   impressum_label: "Impressum",
 };
@@ -85,6 +99,7 @@ const OWL_NS = "http://www.w3.org/2002/07/owl#";
 const RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#";
 const MANCHESTER_TRIGGER_PREDICATES = [RDF_NS + "type", RDFS_NS + "subClassOf"];
 const CLASS_EXPR_DEPTH = 6; // bounded nesting depth for the Manchester-syntax closure fetch
+const BREADCRUMB_MAX_DEPTH = 12; // bounded ancestor-walk depth for the "part of" breadcrumb
 
 // Graph-scoped queries return one row per graph a triple appears in, so a
 // triple duplicated across e.g. assertions/inferences/validated comes back
@@ -314,6 +329,22 @@ function predicateNode(iri, labels) {
   return { iri, curie: curie(iri), label: labels[iri] ?? null };
 }
 
+/** Sort key for ordering a resource's properties. Plain predicate IRIs sort
+ * alphabetically as before, except: if both `has_part_predicate` and
+ * `part_of_predicate` are configured, they're forced to sort immediately
+ * adjacent to each other (at the position "has part" would normally fall),
+ * since they're inverses and showing them next to each other makes a
+ * resource's part-whole relationships easier to read at a glance - rather
+ * than leaving them wherever they'd otherwise land among everything else. */
+function predicateSortKey(p) {
+  const { has_part_predicate, part_of_predicate } = CONFIG;
+  if (has_part_predicate && part_of_predicate) {
+    if (p === has_part_predicate) return has_part_predicate + "\u0000a";
+    if (p === part_of_predicate) return has_part_predicate + "\u0000b";
+  }
+  return p;
+}
+
 /** Group (g, p, value) bindings by predicate, then by distinct value,
  * merging the set of graphs each (predicate, value) pair was found in.
  *
@@ -353,7 +384,11 @@ function groupWithGraphs(bindings, valueKey, labels, expand) {
 
   const fieldName = expand ? expand[2] : null;
   const result = [];
-  for (const p of [...byPred.keys()].sort()) {
+  const predicates = [...byPred.keys()].sort((a, b) => {
+    const ka = predicateSortKey(a), kb = predicateSortKey(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  for (const p of predicates) {
     const items = [];
     for (const entry of byPred.get(p).values()) {
       const node = { ...entry.node };
@@ -646,6 +681,87 @@ SELECT DISTINCT ?sub ?super WHERE {
   return ordered;
 }
 
+// --- "part of" breadcrumb ---------------------------------------------------
+
+/** Walk `config.part_of_predicate` upward from `iri` (a part -> its whole)
+ * one hop at a time, returning the ancestor chain root-first (not including
+ * `iri` itself - the page's own title already shows that). A node can have
+ * more than one "part of" parent in this data (it isn't always a strict
+ * tree - the same item can sit under more than one curriculum variant); this
+ * picks one deterministically (alphabetically-first IRI, resolved in SPARQL
+ * itself via ORDER BY + LIMIT 1) at each step rather than branching, since a
+ * breadcrumb is inherently a single path. Bounded by BREADCRUMB_MAX_DEPTH
+ * and a seen-set, in case of bad/cyclical data. */
+async function fetchPartOfChain(iri, graphs, endpoint) {
+  const predicate = CONFIG.part_of_predicate;
+  if (!predicate) return [];
+  const valuesClause = await graphValuesClause(graphs, endpoint);
+
+  const chain = [];
+  const seen = new Set([iri]);
+  let current = iri;
+  for (let i = 0; i < BREADCRUMB_MAX_DEPTH; i++) {
+    const candidatesQuery = `
+SELECT DISTINCT ?parent WHERE {
+  ${valuesClause}GRAPH ?g {
+    <${current}> <${predicate}> ?parent .
+  }
+}
+`;
+    let candidates;
+    try {
+      candidates = [...new Set(
+        (await sparqlQueryRaw(candidatesQuery, endpoint)).results.bindings
+          .filter((b) => bound(b, "parent"))
+          .map((b) => b.parent.value)
+      )];
+    } catch (e) {
+      break;
+    }
+    if (!candidates.length) break;
+
+    // If `part_of_predicate` is (like BFO's) transitive and this endpoint
+    // materializes that closure as direct triples (seen in practice here -
+    // the same situation as rdfs:subClassOf elsewhere in this app), a single
+    // hop can return several candidates: the true immediate parent AND one
+    // or more distant ancestors reachable via a "shortcut" triple. Picking
+    // one arbitrarily (e.g. alphabetically) would often jump straight past
+    // real intermediate levels. Instead, among the candidates, drop any
+    // that is itself the target of another candidate's "part of" edge (i.e.
+    // is reachable *through* another candidate) - what's left is the
+    // immediate step(s); alphabetical order breaks any remaining tie.
+    let nearest = candidates[0];
+    if (candidates.length > 1) {
+      const values = candidates.map((c) => `<${c}>`).join(" ");
+      const relQuery = `
+SELECT DISTINCT ?sub ?super WHERE {
+  ${valuesClause}GRAPH ?g {
+    VALUES ?sub { ${values} }
+    VALUES ?super { ${values} }
+    ?sub <${predicate}> ?super .
+  }
+  FILTER(?sub != ?super)
+}
+`;
+      const moreDistant = new Set();
+      try {
+        const rel = (await sparqlQueryRaw(relQuery, endpoint)).results.bindings.filter((b) => bound(b, "sub", "super"));
+        for (const b of rel) moreDistant.add(b.super.value);
+      } catch (e) {
+        // fall through - worst case, picks among all candidates below
+      }
+      const immediate = candidates.filter((c) => !moreDistant.has(c)).sort();
+      nearest = (immediate.length ? immediate : [...candidates].sort())[0];
+    }
+
+    if (seen.has(nearest)) break; // cycle guard - shouldn't happen, don't hang if it does
+    seen.add(nearest);
+    chain.push(nearest);
+    current = nearest;
+  }
+  return chain.reverse(); // root-first
+}
+
 // --- top-level queries -----------------------------------------------------
 
 export async function fetchResource(iri, graphs, endpoint) {
@@ -674,10 +790,11 @@ SELECT DISTINCT ?g ?s ?p ?parentPred ?parent WHERE {
 `;
   const typeQ = `SELECT DISTINCT ?g ?type WHERE { ${valuesClause}GRAPH ?g { <${iri}> a ?type } }`;
 
-  const [outData, inData, typeData] = await Promise.all([
+  const [outData, inData, typeData, breadcrumbIris] = await Promise.all([
     sparqlQueryRaw(outQ, endpoint),
     sparqlQueryRaw(inQ, endpoint),
     sparqlQueryRaw(typeQ, endpoint),
+    fetchPartOfChain(iri, graphs, endpoint),
   ]);
   const outBindings = outData.results.bindings.filter((b) => bound(b, "g", "p", "o"));
   const inBindings = inData.results.bindings.filter((b) => bound(b, "g", "s", "p"));
@@ -691,7 +808,7 @@ SELECT DISTINCT ?g ?s ?p ?parentPred ?parent WHERE {
     [classExprEdges, classExprIris] = await fetchClassExpressionEdges(iri, graphs, endpoint);
   }
 
-  const allIris = new Set([iri, ...classExprIris]);
+  const allIris = new Set([iri, ...classExprIris, ...breadcrumbIris]);
   for (const b of typeBindings) allIris.add(b.type.value);
   for (const b of outBindings) {
     allIris.add(b.p.value);
@@ -743,11 +860,26 @@ SELECT DISTINCT ?g ?s ?p ?parentPred ?parent WHERE {
       .sort((a, b) => (a.short < b.short ? -1 : a.short > b.short ? 1 : 0)),
   }));
 
+  // Different curriculum-variant IRIs (e.g. a "LehrplanPLUS" vs. an older
+  // document's node for what's conceptually the same subject) can sit right
+  // next to each other in the chain and resolve to the identical label -
+  // collapse an adjacent repeat rather than showing "Mathematik 1/2 >
+  // Mathematik 1/2" (keeping the one closer to the root, i.e. the one
+  // encountered first in this root-first order).
+  const breadcrumb = [];
+  for (const p of breadcrumbIris) {
+    const label = labels[p] ?? null;
+    const prev = breadcrumb[breadcrumb.length - 1];
+    if (prev && prev.label && label && prev.label === label) continue;
+    breadcrumb.push({ iri: p, curie: curie(p), label });
+  }
+
   return {
     iri,
     curie: curie(iri),
     label: labels[iri] ?? null,
     types,
+    breadcrumb,
     outgoing: outgoingList,
     incoming: incomingList,
     outgoing_truncated: outBindings.length >= OUT_IN_LIMIT,
