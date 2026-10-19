@@ -214,7 +214,7 @@ function bound(b, ...keys) {
 
 export async function listGraphs(endpoint) {
   const data = await sparqlQueryRaw(
-    "SELECT DISTINCT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g ORDER BY DESC(?n)",
+    "SELECT DISTINCT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g",
     endpoint
   );
   const excluded = new Set(CONFIG.excluded_graphs);
@@ -225,6 +225,10 @@ export async function listGraphs(endpoint) {
     if (excluded.has(iri)) continue;
     graphs.push({ iri, short: shortGraphName(iri), count: parseInt(b.n.value, 10) });
   }
+  // Alphabetical by display name, for the graph-filter dropdown - not by
+  // triple count, which varies too much to browse by and says nothing
+  // about which graph you're looking for.
+  graphs.sort((a, b) => a.short.localeCompare(b.short));
   return graphs;
 }
 
