@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SPARQL Data Navigator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>SPARQL Data Navigator</h1>
+    <div id="search-box">
+      <input id="search-input" type="text" autocomplete="off"
+             placeholder="Search by label, or paste an IRI and press Enter...">
+      <ul id="suggestions" hidden></ul>
+    </div>
+    <details id="graph-filter">
+      <summary id="graph-filter-summary">All graphs</summary>
+      <div id="graph-filter-panel">
+        <div id="graph-filter-actions">
+          <button type="button" id="graph-filter-clear">Clear filter (show all graphs)</button>
+        </div>
+        <ul id="graph-filter-list"></ul>
+      </div>
+    </details>
+  </header>
+
+  <main id="content">
+    <div id="empty-state">
+      <p>Search for a resource above, or open a direct link like
+        <code>?iri=&lt;IRI&gt;</code>.</p>
+    </div>
+  </main>
+
+  <footer id="site-footer" hidden>
+    <a id="impressum-link" href="#"></a>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

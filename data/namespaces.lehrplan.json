@@ -1,0 +1,21 @@
+{
+  "xsd": "http://www.w3.org/2001/XMLSchema#",
+  "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+  "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+  "owl": "http://www.w3.org/2002/07/owl#",
+  "skos": "http://www.w3.org/2004/02/skos/core#",
+  "dc": "http://purl.org/dc/elements/1.1/",
+  "dcterms": "http://purl.org/dc/terms/",
+  "lehrplan": "https://w3id.org/lehrplan/ontology/",
+  "obo": "http://purl.obolibrary.org/obo/",
+  "schulart": "https://w3id.org/schulart/",
+  "schulfach": "https://w3id.org/schulfach/",
+  "gnd": "https://d-nb.info/standards/elementset/gnd#",
+  "time": "http://www.w3.org/2006/time#",
+  "doap": "http://usefulinc.com/ns/doap#",
+  "qudt": "http://qudt.org/schema/qudt/",
+  "protege": "http://protege.stanford.edu/plugins/owl/protege#",
+  "sd": "http://www.w3.org/ns/sparql-service-description#",
+  "virtrdf": "http://www.openlinksw.com/schemas/virtrdf#",
+  "ndfi": "https://nfdi.fiz-karlsruhe.de/ontology/"
+}

@@ -1,0 +1,17 @@
+{
+  "title": "Lehrplan RDF Data View",
+  "endpoint": "https://sparql.mem.edufeed.org/sparql",
+  "namespaces_file": "data/namespaces.lehrplan.json",
+  "graph_short_prefix": "https://w3id.org/lehrplan/",
+  "excluded_graphs": [
+    "http://www.openlinksw.com/schemas/virtrdf#",
+    "http://localhost:8890/DAV/",
+    "http://www.w3.org/2002/07/owl#",
+    "urn:core:services:sparql",
+    "http://www.w3.org/ns/ldp#",
+    "urn:activitystreams-owl:map"
+  ],
+  "label_lang_preference": ["de", null, "en"],
+  "impressum_url": "https://yovisto.com/de/impressum/",
+  "impressum_label": "Impressum"
+}
