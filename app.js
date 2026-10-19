@@ -213,6 +213,18 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#search-box")) hideSuggestions();
 });
 
+// "/" focuses search from anywhere on the page (a common convention - e.g.
+// GitHub, Slack) - skipped while already typing somewhere, so it doesn't
+// hijack a literal "/" typed into the search box or any other field.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "/") return;
+  const target = e.target;
+  const isTyping = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+  if (isTyping) return;
+  e.preventDefault();
+  searchInput.focus();
+});
+
 // --- resource rendering ------------------------------------------------------
 
 function renderGraphBadges(graphs) {
@@ -417,15 +429,17 @@ function renderResource(data) {
     <section class="rel-section">
       <h2>Properties (${(data.outgoing || []).length})</h2>
       ${outgoing}
-      ${data.outgoing_truncated ? `<p class="truncated-note">Hit the row cap - some values may be omitted. Try narrowing the graph filter.</p>` : ""}
+      ${data.outgoing_truncated ? `<p class="truncated-note">Hit the row cap (${resourceLimit.toLocaleString()}) - some values may be omitted. <button type="button" class="load-more-btn">Load more</button> or narrow the graph filter.</p>` : ""}
     </section>
 
     <section class="rel-section">
       <h2>Referenced by (${(data.incoming || []).length})</h2>
       ${incoming}
-      ${data.incoming_truncated ? `<p class="truncated-note">Hit the row cap - some references may be omitted. Try narrowing the graph filter.</p>` : ""}
+      ${data.incoming_truncated ? `<p class="truncated-note">Hit the row cap (${resourceLimit.toLocaleString()}) - some references may be omitted. <button type="button" class="load-more-btn">Load more</button> or narrow the graph filter.</p>` : ""}
     </section>
   `;
+
+  contentEl.querySelectorAll(".load-more-btn").forEach((btn) => btn.addEventListener("click", loadMore));
 
   document.getElementById("copy-link-btn").addEventListener("click", () => {
     const url = window.location.origin + window.location.pathname + buildPageUrl(data.iri, selectedGraphs);
@@ -459,14 +473,26 @@ function showError(message) {
   contentEl.innerHTML = `<div class="error-box">${escapeHtml(message)}</div>`;
 }
 
-async function loadResource(iri) {
+// The outgoing/incoming row cap - reset to the default on every fresh
+// navigation; only "Load more" on a truncated resource bumps it, and only
+// for that one view.
+let resourceLimit = Sparql.OUT_IN_LIMIT;
+
+async function loadResource(iri, { resetLimit = true } = {}) {
+  if (resetLimit) resourceLimit = Sparql.OUT_IN_LIMIT;
   showLoading();
   try {
-    const data = await Sparql.fetchResource(iri, selectedGraphs.length ? selectedGraphs : null, ENDPOINT);
+    const data = await Sparql.fetchResource(iri, selectedGraphs.length ? selectedGraphs : null, ENDPOINT, resourceLimit);
     renderResource(data);
   } catch (err) {
     showError(err.message || `Network error: ${err}`);
   }
+}
+
+function loadMore() {
+  resourceLimit += Sparql.OUT_IN_LIMIT;
+  const iri = iriFromLocation();
+  if (iri) loadResource(iri, { resetLimit: false });
 }
 
 // --- init ---------------------------------------------------------------------

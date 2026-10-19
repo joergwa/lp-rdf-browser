@@ -103,8 +103,11 @@ const BREADCRUMB_MAX_DEPTH = 12; // bounded ancestor-walk depth for the "part of
 
 // Graph-scoped queries return one row per graph a triple appears in, so a
 // triple duplicated across e.g. assertions/inferences/validated comes back
-// 3x - raise the cap accordingly versus a plain deduplicated query.
-const OUT_IN_LIMIT = 1500;
+// 3x - raise the cap accordingly versus a plain deduplicated query. This is
+// also the default per-request row cap passed to fetchResource and the
+// increment the UI's "Load more" button bumps it by - exported so app.js
+// doesn't need to duplicate the number.
+export const OUT_IN_LIMIT = 1500;
 const LABEL_BATCH_SIZE = 40;
 
 // --- low-level SPARQL HTTP client ---------------------------------------------
@@ -252,15 +255,37 @@ async function graphValuesClause(graphs, endpoint) {
 
 // --- label resolution ----------------------------------------------------------
 
-/** Batch-fetch rdfs:label / skos:prefLabel for a set of IRIs. Returns
- * {iri: label}, preferring a German-tagged label over an untagged one over
- * an English one over any other language, when more than one is available
- * (per config's label_lang_preference). IRIs with no label found are simply
- * absent from the result. */
+// Resolved labels persist for the page's lifetime, keyed by endpoint+IRI -
+// the same predicates, classes, and frequently-referenced resources (e.g.
+// a curriculum subject node) turn up on page after page, so without this,
+// every single navigation re-resolves labels it already has from scratch.
+// Caches a confirmed "no label" too (as null), so those IRIs aren't
+// re-queried forever either. Safe for a session's lifetime since nothing
+// else in this app can change the underlying data out from under it.
+const labelCache = new Map(); // "endpoint\0iri" -> label|null
+
+/** Batch-fetch rdfs:label / skos:prefLabel for a set of IRIs (skipping ones
+ * already cached). Returns {iri: label}, preferring a German-tagged label
+ * over an untagged one over an English one over any other language, when
+ * more than one is available (per config's label_lang_preference). IRIs
+ * with no label found are simply absent from the result. */
 export async function resolveLabels(iris, endpoint) {
-  const uniqueIris = [...new Set([...iris].filter(Boolean))].sort();
+  const uniqueIris = [...new Set([...iris].filter(Boolean))];
+  const labels = {};
+  const toFetch = [];
+  for (const iri of uniqueIris) {
+    const key = endpoint + "\u0000" + iri;
+    if (labelCache.has(key)) {
+      const cached = labelCache.get(key);
+      if (cached !== null) labels[iri] = cached;
+    } else {
+      toFetch.push(iri);
+    }
+  }
+  if (!toFetch.length) return labels;
+
   const byLang = new Map(); // iri -> Map(lang_or_null -> label)
-  for (const chunk of batched(uniqueIris, LABEL_BATCH_SIZE)) {
+  for (const chunk of batched(toFetch.sort(), LABEL_BATCH_SIZE)) {
     const values = chunk.map((i) => `<${i}>`).join(" ");
     const query = `
 SELECT DISTINCT ?s ?label WHERE {
@@ -286,13 +311,17 @@ SELECT DISTINCT ?s ?label WHERE {
     }
   }
 
-  const labels = {};
-  for (const [s, langs] of byLang) {
+  for (const iri of toFetch) {
+    const langs = byLang.get(iri);
     let chosen = null;
-    for (const pref of CONFIG.label_lang_preference) {
-      if (langs.has(pref)) { chosen = langs.get(pref); break; }
+    if (langs) {
+      for (const pref of CONFIG.label_lang_preference) {
+        if (langs.has(pref)) { chosen = langs.get(pref); break; }
+      }
+      if (chosen === null) chosen = langs.values().next().value;
     }
-    labels[s] = chosen !== null ? chosen : langs.values().next().value;
+    labelCache.set(endpoint + "\u0000" + iri, chosen);
+    if (chosen !== null) labels[iri] = chosen;
   }
   return labels;
 }
@@ -331,6 +360,18 @@ function nodeIdentity(node, graph) {
 
 function predicateNode(iri, labels) {
   return { iri, curie: curie(iri), label: labels[iri] ?? null };
+}
+
+/** Sort key for a value/subject node within one predicate's list - by
+ * whatever text is actually shown for it (label, falling back to curie,
+ * then the bare IRI; a literal's own value; a blank node's opaque id, since
+ * it has no displayable text of its own but still needs a deterministic
+ * position). Used so every property's values read alphabetically instead of
+ * in whatever order the endpoint happened to return them. */
+function nodeSortKey(node) {
+  if (node.kind === "uri") return (node.label || node.curie || node.iri).toLowerCase();
+  if (node.kind === "literal") return String(node.value).toLowerCase();
+  return node.id;
 }
 
 /** Sort key for ordering a resource's properties. Plain predicate IRIs sort
@@ -412,6 +453,7 @@ function groupWithGraphs(bindings, valueKey, labels, expand) {
       }
       items.push(node);
     }
+    items.sort((a, b) => nodeSortKey(a).localeCompare(nodeSortKey(b)));
     result.push({ predicate: predicateNode(p, labels), items });
   }
   return result;
@@ -768,7 +810,7 @@ SELECT DISTINCT ?sub ?super WHERE {
 
 // --- top-level queries -----------------------------------------------------
 
-export async function fetchResource(iri, graphs, endpoint) {
+export async function fetchResource(iri, graphs, endpoint, limit = OUT_IN_LIMIT) {
   const valuesClause = await graphValuesClause(graphs, endpoint);
   // The OPTIONAL expands one level into a blank-node object's own
   // properties (guarded to blank nodes only - without that guard it would
@@ -779,7 +821,7 @@ SELECT DISTINCT ?g ?p ?o ?p2 ?val WHERE {
     <${iri}> ?p ?o .
     OPTIONAL { FILTER(isBlank(?o)) . ?o ?p2 ?val }
   }
-} ORDER BY ?p LIMIT ${OUT_IN_LIMIT}
+} ORDER BY ?p LIMIT ${limit}
 `;
   // Symmetric idea for incoming blank-node subjects: instead of the bnode's
   // own properties, find what points *to* it (its "parent") - usually a
@@ -790,7 +832,7 @@ SELECT DISTINCT ?g ?s ?p ?parentPred ?parent WHERE {
     ?s ?p <${iri}> .
     OPTIONAL { FILTER(isBlank(?s)) . ?parent ?parentPred ?s }
   }
-} ORDER BY ?p LIMIT ${OUT_IN_LIMIT}
+} ORDER BY ?p LIMIT ${limit}
 `;
   const typeQ = `SELECT DISTINCT ?g ?type WHERE { ${valuesClause}GRAPH ?g { <${iri}> a ?type } }`;
 
@@ -886,8 +928,8 @@ SELECT DISTINCT ?g ?s ?p ?parentPred ?parent WHERE {
     breadcrumb,
     outgoing: outgoingList,
     incoming: incomingList,
-    outgoing_truncated: outBindings.length >= OUT_IN_LIMIT,
-    incoming_truncated: inBindings.length >= OUT_IN_LIMIT,
+    outgoing_truncated: outBindings.length >= limit,
+    incoming_truncated: inBindings.length >= limit,
   };
 }
 
@@ -953,3 +995,21 @@ LIMIT ${limit}
     .filter((b) => bound(b, "s", "label"))
     .map((b) => ({ iri: b.s.value, curie: curie(b.s.value), label: b.label.value }));
 }
+
+// --- exposed for tests only --------------------------------------------------
+// Not part of the app's real API surface (nothing in app.js imports this) -
+// just a seam for tests/sparql.test.mjs to reach the internal logic that's
+// worth unit-testing directly (pure functions, or ones that are easiest to
+// test with a mocked fetch) without picking apart the public functions above.
+export const _internal = {
+  bound,
+  describeNode,
+  nodeIdentity,
+  predicateNode,
+  predicateSortKey,
+  groupWithGraphs,
+  flattenRdfList,
+  renderClassExpr,
+  orderTypesByHierarchy,
+  fetchPartOfChain,
+};

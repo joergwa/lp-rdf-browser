@@ -276,6 +276,11 @@ section.rel-section > h2 { font-size: 0.95rem; text-transform: uppercase; letter
 .manchester-raw summary { cursor: pointer; }
 
 .truncated-note { margin-top: 0.5rem; font-size: 0.78rem; color: var(--muted); }
+.load-more-btn {
+  font: inherit; font-size: 0.78rem; color: var(--accent); background: none;
+  border: none; padding: 0; cursor: pointer; text-decoration: underline;
+}
+.load-more-btn:hover { color: var(--class-color); }
 
 .empty-filtered { margin-top: 1.5rem; }
 .empty-filtered > p { color: var(--muted); }
